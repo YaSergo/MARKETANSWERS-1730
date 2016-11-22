@@ -3,7 +3,8 @@ set end_date=  '2016-11-15';
 
 -- предварительные данные для расчёта средних fee
 WITH cpa_offers AS (
-  SELECT
+  SELECT DISTINCT
+    day,
     category_id AS hyper_cat_id,
     model_id AS hyper_id,
     binary_ware_md5 AS ware_md5,
@@ -50,6 +51,7 @@ WITH cpa_offers AS (
 -- клики от партнёров
 ), parther_clicks AS (
   SELECT
+    day,
     cpc_clicks.clid,
     cpc_clicks.hyper_cat_id,
     categories_details.cpa_type,
@@ -65,6 +67,7 @@ WITH cpa_offers AS (
     AND state = 1 -- убираем клики сотрудников яндекса
     AND clid > 0 -- указан ID партнёра
     AND distr_type = 2 -- партнёр (4,5 - советник; 1 - дистрибуция)
+    AND geo_id = 213 -- Москва
 
 -- клики от партнёров расширенные информацией о среднем fee
 ), parther_clicks_with_fee AS (
@@ -91,6 +94,7 @@ WITH cpa_offers AS (
     ON parther_clicks.hyper_cat_id = avg_fees_by_hyper_cat_id.hyper_cat_id
   LEFT JOIN cpa_offers  -- подтягиваем точные значения fee
     ON parther_clicks.ware_md5 = cpa_offers.ware_md5
+      AND parther_clicks.day = cpa_offers.day
 
 -- таблица с конверсией партнёров за октябрь 2016 года
 -- выгружена из statface: https://nda.ya.ru/3SDjW6
@@ -121,12 +125,12 @@ WITH cpa_offers AS (
   SUM(IF(cpa_type <> 'cpc_and_cpa', offers_price*avg_fee_alg1, 0)) AS after_offers_price_dot_fee_alg1,
   SUM(IF(cpa_type <> 'cpc_and_cpa', offers_price*avg_fee_alg2, 0)) AS after_offers_price_dot_fee_alg2
 
-FROM parther_clicks_with_fee LEFT JOIN parthers_conversion
-  ON parther_clicks_with_fee.clid = parthers_conversion.clid
-GROUP BY
-  parther_clicks_with_fee.clid,
-  parthers_conversion.num_purchases,
-  parthers_conversion.conversion
+  FROM parther_clicks_with_fee LEFT JOIN parthers_conversion
+    ON parther_clicks_with_fee.clid = parthers_conversion.clid
+  GROUP BY
+    parther_clicks_with_fee.clid,
+    parthers_conversion.num_purchases,
+    parthers_conversion.conversion
 )
 
 SELECT

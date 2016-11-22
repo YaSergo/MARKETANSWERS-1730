@@ -18,69 +18,79 @@ WITH cpa_offers AS (
 
 -- расчёт средних fee
 ), avg_fees_by_hyper_id AS (
-SELECT -- avg_fee по записям с указанием hyper_id
-  hyper_cat_id,
-  hyper_id,
-  AVG(fee) AS avg_fee
-FROM cpa_offers
-WHERE hyper_id <> 0
-GROUP BY
-  hyper_cat_id,
-  hyper_id
+  SELECT -- только по оплаченным заказам
+    model_hid AS hyper_cat_id,
+    model_id AS hyper_id,
+    sum(offer_fee * item_count) / sum(item_count) AS avg_fee
+  FROM
+    analyst.orders_dict
+  WHERE
+    creation_day BETWEEN ${hiveconf:start_date} AND ${hiveconf:end_date}
+    AND order_is_billed = 1
+    AND NOT order_is_fake AND NOT buyer_is_fake AND NOT shop_is_fake -- устраняем фейки из данных
+    AND model_id > 0
+  GROUP BY
+    model_hid,
+    model_id
 
 ), avg_fees_by_hyper_cat_id AS (
-SELECT -- avg_fee по категориям
-  hyper_cat_id,
-  -1 AS hyper_id,
-  AVG(fee) AS avg_fee
-FROM cpa_offers
-GROUP BY
-  hyper_cat_id
+  SELECT
+    model_hid AS hyper_cat_id,
+    -1 AS hyper_id,
+    sum(offer_fee * item_count) / sum(item_count) AS avg_fee
+  FROM
+    analyst.orders_dict
+  WHERE
+    creation_day BETWEEN ${hiveconf:start_date} AND ${hiveconf:end_date}
+    AND order_is_billed = 1
+    AND NOT order_is_fake AND NOT buyer_is_fake AND NOT shop_is_fake -- устраняем фейки из данных
+  GROUP BY
+    model_hid
 
 -- клики от партнёров
 ), parther_clicks AS (
-SELECT
-  cpc_clicks.clid,
-  cpc_clicks.hyper_cat_id,
-  categories_details.cpa_type,
-  cpc_clicks.hyper_id,
-  cpc_clicks.ware_md5,
-  cpc_clicks.price*30/100 AS clicks_price,      -- в рублях
-  cpc_clicks.offer_price AS offers_price -- в рублях (в теории...)
-FROM robot_market_logs.clicks as cpc_clicks LEFT JOIN dictionaries.categories as categories_details
-  ON cpc_clicks.hyper_cat_id = categories_details.hyper_id
-WHERE
-  day BETWEEN ${hiveconf:start_date} AND ${hiveconf:end_date}
-  AND nvl(filter, 0) = 0 -- не накрутка
-  AND state = 1 -- убираем клики сотрудников яндекса
-  AND clid > 0 -- указан ID партнёра
-  AND distr_type = 2 -- партнёр (4,5 - советник; 1 - дистрибуция)
+  SELECT
+    cpc_clicks.clid,
+    cpc_clicks.hyper_cat_id,
+    categories_details.cpa_type,
+    cpc_clicks.hyper_id,
+    cpc_clicks.ware_md5,
+    cpc_clicks.price*30/100 AS clicks_price,      -- в рублях
+    cpc_clicks.offer_price AS offers_price -- в рублях (в теории...)
+  FROM robot_market_logs.clicks as cpc_clicks LEFT JOIN dictionaries.categories as categories_details
+    ON cpc_clicks.hyper_cat_id = categories_details.hyper_id
+  WHERE
+    day BETWEEN ${hiveconf:start_date} AND ${hiveconf:end_date}
+    AND nvl(filter, 0) = 0 -- не накрутка
+    AND state = 1 -- убираем клики сотрудников яндекса
+    AND clid > 0 -- указан ID партнёра
+    AND distr_type = 2 -- партнёр (4,5 - советник; 1 - дистрибуция)
 
 -- клики от партнёров расширенные информацией о среднем fee
 ), parther_clicks_with_fee AS (
-SELECT
-  parther_clicks.clid,
-  parther_clicks.hyper_cat_id,
-  parther_clicks.cpa_type,
-  parther_clicks.hyper_id,
-  parther_clicks.clicks_price,
-  parther_clicks.offers_price,
+  SELECT
+    parther_clicks.clid,
+    parther_clicks.hyper_cat_id,
+    parther_clicks.cpa_type,
+    parther_clicks.hyper_id,
+    parther_clicks.clicks_price,
+    parther_clicks.offers_price,
 
-  cpa_offers.fee AS fee_from_offer,
-  avg_fees_by_hyper_id.avg_fee AS avg_fee_by_hyper_id,
-  -- чтобы была колонка, на случай, если не получилось привязать avg_fee по hyper_id
-  avg_fees_by_hyper_cat_id.avg_fee AS avg_fee_by_hyper_cat_id,
-  -- alg1: берём fee для оффера, иначе среднее fee для hyper_id, иначе среднее для категории, иначе fee ставим 0.02
-  nvl(nvl(nvl(cpa_offers.fee, avg_fees_by_hyper_id.avg_fee), avg_fees_by_hyper_cat_id.avg_fee), 0.02) AS avg_fee_alg1,
-  -- alg2: берём fee для оффера, ставим 0.02 -- предложил Антон
-  nvl(cpa_offers.fee, 0.02) AS avg_fee_alg2
-FROM parther_clicks LEFT JOIN avg_fees_by_hyper_id
-  ON parther_clicks.hyper_cat_id = avg_fees_by_hyper_id.hyper_cat_id
-  AND parther_clicks.hyper_id = avg_fees_by_hyper_id.hyper_id
-LEFT JOIN avg_fees_by_hyper_cat_id
-  ON parther_clicks.hyper_cat_id = avg_fees_by_hyper_cat_id.hyper_cat_id
-LEFT JOIN cpa_offers  -- подтягиваем точные значения fee
-  ON parther_clicks.ware_md5 = cpa_offers.ware_md5
+    cpa_offers.fee AS fee_from_offer,
+    avg_fees_by_hyper_id.avg_fee AS avg_fee_by_hyper_id,
+    -- чтобы была колонка, на случай, если не получилось привязать avg_fee по hyper_id
+    avg_fees_by_hyper_cat_id.avg_fee AS avg_fee_by_hyper_cat_id,
+    -- alg1: берём fee для оффера, иначе среднее fee для hyper_id, иначе среднее для категории, иначе fee ставим 0.02
+    nvl(nvl(nvl(cpa_offers.fee, avg_fees_by_hyper_id.avg_fee), avg_fees_by_hyper_cat_id.avg_fee), 0.02) AS avg_fee_alg1,
+    -- alg2: берём fee для оффера, ставим 0.02 -- предложил Антон
+    nvl(cpa_offers.fee, 0.02) AS avg_fee_alg2
+  FROM parther_clicks LEFT JOIN avg_fees_by_hyper_id
+    ON parther_clicks.hyper_cat_id = avg_fees_by_hyper_id.hyper_cat_id
+    AND parther_clicks.hyper_id = avg_fees_by_hyper_id.hyper_id
+  LEFT JOIN avg_fees_by_hyper_cat_id
+    ON parther_clicks.hyper_cat_id = avg_fees_by_hyper_cat_id.hyper_cat_id
+  LEFT JOIN cpa_offers  -- подтягиваем точные значения fee
+    ON parther_clicks.ware_md5 = cpa_offers.ware_md5
 
 -- таблица с конверсией партнёров за октябрь 2016 года
 -- выгружена из statface: https://nda.ya.ru/3SDjW6
